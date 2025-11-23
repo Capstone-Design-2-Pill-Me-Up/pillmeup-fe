@@ -54,8 +54,11 @@ class WarningsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 📘 주의사항이 없을 때
     if (warnings.isEmpty) {
       return Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         child: Padding(
           padding: EdgeInsets.all(16),
           child: Column(
@@ -63,11 +66,7 @@ class WarningsList extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(
-                    Icons.security,
-                    color: Colors.green[600],
-                    size: 20,
-                  ),
+                  Icon(Icons.security, color: Colors.green[600], size: 20),
                   SizedBox(width: 8),
                   Text(
                     '안전성 검사 결과',
@@ -99,7 +98,7 @@ class WarningsList extends StatelessWidget {
                     Text(
                       '안전합니다',
                       style: TextStyle(
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
                         color: Colors.green[800],
                         fontSize: 16,
                       ),
@@ -107,10 +106,7 @@ class WarningsList extends StatelessWidget {
                     SizedBox(height: 8),
                     Text(
                       '현재 확인된 주의사항이 없습니다.',
-                      style: TextStyle(
-                        color: Colors.green[600],
-                        fontSize: 14,
-                      ),
+                      style: TextStyle(color: Colors.green[600], fontSize: 14),
                     ),
                   ],
                 ),
@@ -121,7 +117,7 @@ class WarningsList extends StatelessWidget {
       );
     }
 
-    // 위험도 순으로 정렬
+    // ⚠️ 주의사항이 있을 때 (위험도 순으로 정렬)
     final sortedWarnings = List<Warning>.from(warnings);
     sortedWarnings.sort((a, b) {
       const levelOrder = {
@@ -133,19 +129,17 @@ class WarningsList extends StatelessWidget {
     });
 
     return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 헤더
+            // 🔹 헤더
             Row(
               children: [
-                Icon(
-                  Icons.warning,
-                  color: Colors.red[600],
-                  size: 20,
-                ),
+                Icon(Icons.warning, color: Colors.red[600], size: 20),
                 SizedBox(width: 8),
                 Text(
                   '주의사항 (${warnings.length}개)',
@@ -159,104 +153,109 @@ class WarningsList extends StatelessWidget {
             ),
             SizedBox(height: 16),
 
-            // 경고 목록
-            ...sortedWarnings.map((warning) => Container(
-              margin: EdgeInsets.only(bottom: 12),
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                border: Border(
-                  left: BorderSide(
-                    color: _getWarningColor(warning.level),
-                    width: 4,
-                  ),
-                ),
-                color: Colors.grey[50],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: _getWarningColor(warning.level).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Icon(
-                      _getWarningIcon(warning.type),
+            // 🔹 경고 목록
+            ...sortedWarnings.map(
+              (warning) => Container(
+                margin: EdgeInsets.only(bottom: 12),
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(
                       color: _getWarningColor(warning.level),
-                      size: 16,
+                      width: 4,
                     ),
                   ),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              warning.type,
-                              style: TextStyle(
-                                fontWeight: FontWeight.w500,
-                                color: _getWarningColor(warning.level).withOpacity(0.8),
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: _getWarningColor(warning.level).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Icon(
+                        _getWarningIcon(warning.type),
+                        color: _getWarningColor(warning.level),
+                        size: 16,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                warning.type,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                  color: _getWarningColor(
+                                    warning.level,
+                                  ).withOpacity(0.8),
+                                ),
                               ),
+                              Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _getWarningColor(warning.level),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  _getWarningLevelText(warning.level),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            warning.message,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[700],
                             ),
+                          ),
+                          if (warning.description != null &&
+                              warning.description!.isNotEmpty) ...[
+                            SizedBox(height: 8),
                             Container(
-                              padding: EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 2,
-                              ),
+                              width: double.infinity,
+                              padding: EdgeInsets.all(8),
                               decoration: BoxDecoration(
-                                color: _getWarningColor(warning.level),
-                                borderRadius: BorderRadius.circular(12),
+                                color: Colors.grey[100],
+                                borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                _getWarningLevelText(warning.level),
+                                warning.description!,
                                 style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
                                 ),
                               ),
                             ),
                           ],
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          warning.message,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey[700],
-                          ),
-                        ),
-                        if (warning.description != null) ...[
-                          SizedBox(height: 8),
-                          Container(
-                            width: double.infinity,
-                            padding: EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[100],
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              warning.description!,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                          ),
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            )).toList(),
+            ),
 
-            // 중요 안내사항
+            // 🔹 중요 안내
             Container(
               margin: EdgeInsets.only(top: 12),
               padding: EdgeInsets.all(16),
@@ -268,11 +267,7 @@ class WarningsList extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.info,
-                    color: Colors.blue[600],
-                    size: 20,
-                  ),
+                  Icon(Icons.info, color: Colors.blue[600], size: 20),
                   SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -281,13 +276,13 @@ class WarningsList extends StatelessWidget {
                         Text(
                           '중요 안내사항',
                           style: TextStyle(
-                            fontWeight: FontWeight.w500,
+                            fontWeight: FontWeight.w600,
                             color: Colors.blue[800],
                           ),
                         ),
                         SizedBox(height: 4),
                         Text(
-                          '의약품 복용 전 반드시 의사나 약사와 상담하세요. 이 정보는 참고용이며, 전문의의 진료를 대체할 수 없습니다.',
+                          '의약품 복용 전 반드시 의사나 약사와 상담하세요.\n이 정보는 참고용이며, 전문의의 진료를 대체할 수 없습니다.',
                           style: TextStyle(
                             fontSize: 14,
                             color: Colors.blue[700],

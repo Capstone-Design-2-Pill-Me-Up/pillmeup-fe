@@ -3,7 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 
 class CameraCapture extends StatefulWidget {
-  final Function(File) onAnalyze;
+  final Future<void> Function(File) onAnalyze;
   final bool isAnalyzing;
 
   const CameraCapture({
@@ -27,16 +27,16 @@ class _CameraCaptureState extends State<CameraCapture> {
         preferredCameraDevice: CameraDevice.rear,
         imageQuality: 80,
       );
-      
+
       if (photo != null) {
         setState(() {
           selectedImage = File(photo.path);
         });
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('카메라를 열 수 없습니다: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('카메라를 열 수 없습니다: $e')));
     }
   }
 
@@ -46,20 +46,20 @@ class _CameraCaptureState extends State<CameraCapture> {
         source: ImageSource.gallery,
         imageQuality: 80,
       );
-      
+
       if (image != null) {
         setState(() {
           selectedImage = File(image.path);
         });
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('갤러리를 열 수 없습니다: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('갤러리를 열 수 없습니다: $e')));
     }
   }
 
-  void _handleAnalyze() {
+  void _handleAnalyze() async {
     if (selectedImage != null) {
       widget.onAnalyze(selectedImage!);
     }
@@ -83,17 +83,12 @@ class _CameraCaptureState extends State<CameraCapture> {
               // 제목
               Text(
                 '알약 촬영',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               SizedBox(height: 8),
               Text(
                 '알약을 촬영하거나 이미지를 업로드해주세요',
-                style: TextStyle(
-                  color: Colors.grey[600],
-                ),
+                style: TextStyle(color: Colors.grey[600]),
                 textAlign: TextAlign.center,
               ),
               SizedBox(height: 24),
@@ -127,7 +122,7 @@ class _CameraCaptureState extends State<CameraCapture> {
                   ],
                 ),
                 SizedBox(height: 16),
-                
+
                 // 분석 버튼
                 SizedBox(
                   width: double.infinity,
@@ -170,17 +165,11 @@ class _CameraCaptureState extends State<CameraCapture> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        Icons.camera_alt,
-                        size: 48,
-                        color: Colors.grey[400],
-                      ),
+                      Icon(Icons.camera_alt, size: 48, color: Colors.grey[400]),
                       SizedBox(height: 16),
                       Text(
                         '카메라로 알약을 촬영하거나\n파일을 선택하세요',
-                        style: TextStyle(
-                          color: Colors.grey[600],
-                        ),
+                        style: TextStyle(color: Colors.grey[600]),
                         textAlign: TextAlign.center,
                       ),
                       SizedBox(height: 16),
@@ -193,7 +182,7 @@ class _CameraCaptureState extends State<CameraCapture> {
                   ),
                 ),
                 SizedBox(height: 16),
-                
+
                 // 파일 선택 버튼
                 SizedBox(
                   width: double.infinity,
@@ -206,7 +195,7 @@ class _CameraCaptureState extends State<CameraCapture> {
               ],
 
               SizedBox(height: 16),
-              
+
               // 팁
               Container(
                 padding: EdgeInsets.all(12),
@@ -221,10 +210,7 @@ class _CameraCaptureState extends State<CameraCapture> {
                     Expanded(
                       child: Text(
                         '팁: 알약을 밝은 곳에서 선명하게 촬영해주세요',
-                        style: TextStyle(
-                          color: Colors.blue[700],
-                          fontSize: 12,
-                        ),
+                        style: TextStyle(color: Colors.blue[700], fontSize: 12),
                       ),
                     ),
                   ],
