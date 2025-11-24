@@ -91,28 +91,8 @@ class _MainDashboardState extends State<MainDashboard> {
   String? gptAnalysisResult;
   String? gptAnalysisError;
 
-  AnalysisResult _parseDrugCautionResponse(
-    dynamic data, {
-    String? preferredItemSeq,
-  }) {
-    final foundList = (data['data']['foundDrugs'] as List<dynamic>? ?? []);
-
-    if (foundList.isEmpty) {
-      throw Exception('❌ DUR 응답에 foundDrugs가 비어 있습니다.');
-    }
-
-    Map<String, dynamic> found;
-
-    if (preferredItemSeq != null) {
-      // preferredItemSeq와 itemSeq가 같은 것을 먼저 찾기
-      found = foundList.cast<Map<String, dynamic>>().firstWhere(
-        (d) => d['itemSeq'].toString() == preferredItemSeq,
-        orElse: () => foundList.first as Map<String, dynamic>,
-      );
-    } else {
-      // 예전처럼 0번째 사용 (fallback)
-      found = foundList.first as Map<String, dynamic>;
-    }
+  AnalysisResult _parseDrugCautionResponse(dynamic data) {
+    final found = data['data']['foundDrugs'][0] as Map<String, dynamic>;
 
     final warnings = <Warning>[];
 
@@ -167,7 +147,7 @@ class _MainDashboardState extends State<MainDashboard> {
         itemSeq: found['itemSeq'].toString(),
         itemName: found['itemName'] ?? '',
         entpName: found['entpName'] ?? '',
-        itemImage: found['fileUrl'] ?? found['photo'] ?? '',
+        itemImage: found['photo'] ?? '',
         efcyQesitm: found['efcyQesitm'] ?? '',
         useMethodQesitm: found['useMethodQesitm'] ?? '',
         atpnWarnQesitm: found['atpnWarnQesitm'] ?? '',
@@ -374,131 +354,39 @@ class _MainDashboardState extends State<MainDashboard> {
     try {
       // 1️⃣ 이미지 업로드 → AI 모델이 itemSeq 리스트 반환
       final uploadRes = await ApiService.uploadPillImage(imageFile: imageFile);
-      print("📤 [DEBUG] /photo/upload FULL RESPONSE ↓↓↓");
-      ApiService.printLong(uploadRes.data);
+      print("📤 업로드 응답: ${uploadRes.data}");
 
-      // 업로드된 원본 사진 URL (있으면)
-      final String? uploadImageUrl =
-          uploadRes.data?['data']?['fileUrl'] as String?;
-
+      final detectedName = uploadRes.data?['data']?['detectedName'];
+      final confidence = uploadRes.data?['data']?['confidence'];
       final List<dynamic>? itemSeqList =
           uploadRes.data?['data']?['itemSeqList'];
       final photoId = uploadRes.data?['data']?['photoId'];
-
-      print(
-        "🔎 [DEBUG] itemSeqList: $itemSeqList  photoId: $photoId  uploadImage: $uploadImageUrl",
-      );
 
       if (itemSeqList == null || itemSeqList.isEmpty) {
         throw Exception("❌ AI 분석 실패: item_seq를 가져오지 못함");
       }
 
-      // ✅ 기준이 되는 첫 번째 itemSeq를 명확히 정해줌
-      final firstItemSeq = itemSeqList.first.toString();
+      print("🧠 AI 결과 item_seq: $itemSeqList");
 
-      print("🧠 AI 결과 item_seq: $itemSeqList (기준 itemSeq: $firstItemSeq)");
-
-      // 2️⃣ DUR + overallCaution 조회 (/drug/caution)
+      // 2️⃣ item_seq 리스트 기반 약품 주의사항 조회
       final drugRes = await ApiService.getDrugCaution(
-        itemSeqList: [firstItemSeq], // ✅ 하나만 명확하게 보냄
+        itemSeqList: itemSeqList.map((e) => e.toString()).toList(),
         photoId: photoId,
       );
 
-      print("💊 [DEBUG] /drug/caution FULL RESPONSE ↓↓↓");
-      ApiService.printLong(drugRes.data);
+      print("💊 약품 분석 응답: ${drugRes.data}");
 
-      // ✅ 여기서도 기준 itemSeq를 넘겨줌
-      final cautionResult = _parseDrugCautionResponse(
-        drugRes.data,
-        preferredItemSeq: firstItemSeq,
-      );
+      // 3️⃣ 앱에서 쓰는 모델 형태로 파싱
+      final result = _parseDrugCautionResponse(drugRes.data);
 
-      // 기본 finalResult는 cautionResult
-      AnalysisResult finalResult = cautionResult;
-
-      try {
-        // 3️⃣ 첫 번째 itemSeq 기준으로 상세 정보 조회 (/drug/{itemSeq})
-        final firstItemSeq = itemSeqList.first.toString();
-        final detailRes = await ApiService.getDrugDetail(firstItemSeq);
-
-        print("📄 [DEBUG] /drug/$firstItemSeq FULL RESPONSE ↓↓↓");
-        ApiService.printLong(detailRes.data);
-
-        final detailResult = _parseDrugDetailResponse(detailRes.data);
-
-        // 3-1️⃣ warnings 합치기 (DUR + 상세 상호작용/부작용/주의사항)
-        final mergedWarnings = <Warning>[
-          ...cautionResult.warnings,
-          ...detailResult.warnings,
-        ];
-
-        // 3-2️⃣ 사용할 이미지 URL 결정 (DB > 업로드 > caution)
-        final String imageUrl =
-            (detailResult.pillInfo.itemImage.isNotEmpty
-                ? detailResult.pillInfo.itemImage
-                : null) ??
-            (uploadImageUrl?.isNotEmpty == true ? uploadImageUrl : null) ??
-            (cautionResult.pillInfo.itemImage.isNotEmpty
-                ? cautionResult.pillInfo.itemImage
-                : '');
-
-        // 3-3️⃣ 최종 결과 구성
-        finalResult = AnalysisResult(
-          pillInfo: PillInfo(
-            itemName: detailResult.pillInfo.itemName,
-            itemSeq: detailResult.pillInfo.itemSeq,
-            entpName: detailResult.pillInfo.entpName,
-            itemImage: imageUrl, // 🔥 여기서 최종 확정
-            efcyQesitm: detailResult.pillInfo.efcyQesitm,
-            useMethodQesitm: detailResult.pillInfo.useMethodQesitm,
-            atpnWarnQesitm: detailResult.pillInfo.atpnWarnQesitm,
-            atpnQesitm: detailResult.pillInfo.atpnQesitm,
-            intrcQesitm: detailResult.pillInfo.intrcQesitm,
-            seQesitm: detailResult.pillInfo.seQesitm,
-          ),
-          warnings: mergedWarnings,
-          overallCaution: cautionResult.overallCaution,
-        );
-      } catch (e) {
-        // 상세 조회/머지 실패해도 cautionResult + 업로드/기타 이미지로 최대한 채움
-        print("⚠️ /drug/{itemSeq} 상세 병합 실패: $e");
-
-        final String imageUrl =
-            (cautionResult.pillInfo.itemImage.isNotEmpty
-                ? cautionResult.pillInfo.itemImage
-                : null) ??
-            (uploadImageUrl?.isNotEmpty == true ? uploadImageUrl : null) ??
-            '';
-
-        finalResult = AnalysisResult(
-          pillInfo: PillInfo(
-            itemName: cautionResult.pillInfo.itemName,
-            itemSeq: cautionResult.pillInfo.itemSeq,
-            entpName: cautionResult.pillInfo.entpName,
-            itemImage: imageUrl,
-            efcyQesitm: cautionResult.pillInfo.efcyQesitm,
-            useMethodQesitm: cautionResult.pillInfo.useMethodQesitm,
-            atpnWarnQesitm: cautionResult.pillInfo.atpnWarnQesitm,
-            atpnQesitm: cautionResult.pillInfo.atpnQesitm,
-            intrcQesitm: cautionResult.pillInfo.intrcQesitm,
-            seQesitm: cautionResult.pillInfo.seQesitm,
-          ),
-          warnings: cautionResult.warnings,
-          overallCaution: cautionResult.overallCaution,
-        );
-      }
-
-      print('🖼 최종 finalResult image: ${finalResult.pillInfo.itemImage}');
-
-      // 4️⃣ 상태 반영
       setState(() {
-        analysisResult = finalResult;
-        analysisHistory = [finalResult, ...analysisHistory.take(4).toList()];
+        analysisResult = result;
+        analysisHistory = [result, ...analysisHistory.take(4).toList()];
         viewMode = ViewMode.result;
       });
 
-      // GPT는 백에서 overallCaution 돌리고 있으니 생략 가능
-      // await fetchGptOverallCaution(finalResult);
+      // 4️⃣ GPT 요청 (옵션)
+      await fetchGptOverallCaution(result);
     } catch (e) {
       ScaffoldMessenger.of(
         context,
@@ -717,8 +605,6 @@ class _MainDashboardState extends State<MainDashboard> {
   }
 
   Widget _buildResultView() {
-    print('🖼 resultView image: ${analysisResult?.pillInfo.itemImage}');
-
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -764,33 +650,8 @@ class _MainDashboardState extends State<MainDashboard> {
                   padding: EdgeInsets.all(16),
                   child: Column(
                     children: [
-                      // 🔥 약 사진 썸네일
-                      /*if (analysisResult!.pillInfo.itemImage.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: Image.network(
-                              analysisResult!.pillInfo.itemImage,
-                              width: 120,
-                              height: 120,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) {
-                                return Container(
-                                  width: 120,
-                                  height: 120,
-                                  color: Colors.grey[300],
-                                  child: const Icon(
-                                    Icons.medical_services,
-                                    size: 40,
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ),*/
                       PillInfoCard(pillInfo: analysisResult!.pillInfo),
-                      const SizedBox(height: 16),
+                      SizedBox(height: 16),
                       WarningsList(warnings: analysisResult!.warnings),
                     ],
                   ),
