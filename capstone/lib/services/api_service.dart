@@ -261,4 +261,54 @@ class ApiService {
       );
     }
   }
+
+  /// ✅ 여러 장 사진 업로드 API
+  static Future<Response> uploadMultiplePillImages({
+    required List<File> imageFiles,
+  }) async {
+    // 1) 토큰 + memberId 읽기
+    final token = await _storage.read(key: 'accessToken');
+    final memberIdStr = await _storage.read(key: 'memberId');
+
+    if (token == null || token.isEmpty) {
+      throw Exception("로그인이 필요합니다.");
+    }
+    if (memberIdStr == null || memberIdStr.isEmpty) {
+      throw Exception("memberId 조회 실패");
+    }
+
+    final memberId = int.tryParse(memberIdStr);
+    if (memberId == null) throw Exception("memberId 파싱 실패");
+
+    _dio.options.headers['Authorization'] = 'Bearer $token';
+
+    // 2) FormData 생성
+    final formData = FormData();
+    formData.fields.add(MapEntry("memberId", memberId.toString()));
+
+    // 3) 여러 파일 추가
+    for (int i = 0; i < imageFiles.length; i++) {
+      final file = imageFiles[i];
+      final fileName = file.path.split('/').last;
+
+      formData.files.add(
+        MapEntry(
+          "file", // 백엔드 name="file"
+          await MultipartFile.fromFile(
+            file.path,
+            filename:
+                "image_${DateTime.now().millisecondsSinceEpoch}_$fileName",
+          ),
+        ),
+      );
+    }
+
+    // 4) 업로드 호출
+    try {
+      final res = await _dio.post("/photo/upload", data: formData);
+      return res;
+    } on DioException catch (e) {
+      throw Exception("여러 사진 업로드 실패: ${e.response?.data ?? e.message}");
+    }
+  }
 }

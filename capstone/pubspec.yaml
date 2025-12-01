@@ -17,12 +17,28 @@ dependencies:
   flutter_secure_storage: ^9.0.0  # JWT 토큰 저장용
 
 dev_dependencies:
+
   flutter_test:
     sdk: flutter
 
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.4.1
 
 flutter:
 
   uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+
+flutter_native_splash:            
+  color: "#FFFFFF"                
+  image: assets/icon/app_icon.png 
+
+  android_12:                     # 안드로이드 12 전용 설정
+    image: assets/icon/app_icon.png
+    icon_background_color: "#FFFFFF"
 

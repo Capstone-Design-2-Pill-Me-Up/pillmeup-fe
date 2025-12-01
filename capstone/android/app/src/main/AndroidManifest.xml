@@ -2,7 +2,7 @@
     package="com.example.capstone">
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="capstone"
+        android:label="PillMeUp"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

@@ -86,6 +86,16 @@ class _MainDashboardState extends State<MainDashboard> {
   AnalysisResult? analysisResult;
   List<AnalysisResult> analysisHistory = [];
 
+  // 🔽 이번 촬영(사진 한 장) 결과들 (좌우 스와이프용)
+  List<AnalysisResult> currentShotResults = [];
+  int currentPillIndex = 0;
+
+  // 🔽 지금까지 찍어서 누적된 itemSeq (여러 장 찍어도 계속 누적)
+  final Set<String> _scannedItemSeqs = {};
+
+  // 🔽 백엔드에서 내려오는 "전체 조합" 기준 종합 주의사항
+  String? globalOverallCaution;
+
   // GPT 분석 상태
   bool isGptAnalyzing = false;
   String? gptAnalysisResult;
@@ -368,8 +378,210 @@ class _MainDashboardState extends State<MainDashboard> {
     }
   }
 
+  Future<void> handleAnalyzeMulti(List<File> imageFiles) async {
+    setState(() {
+      isAnalyzing = true;
+      currentShotResults = [];
+      currentPillIndex = 0;
+    });
+
+    try {
+      // 1) 여러 장 업로드
+      final uploadRes = await ApiService.uploadMultiplePillImages(
+        imageFiles: imageFiles,
+      );
+
+      print("📤 /photo/upload (MULTI) 전체 응답 ↓↓↓");
+      ApiService.printLong(uploadRes.data);
+
+      // data[] 배열
+      final List<dynamic>? photos = uploadRes.data?['data'];
+
+      if (photos == null || photos.isEmpty) {
+        throw Exception("❌ 업로드 후 AI 결과가 비어 있음");
+      }
+
+      final List<AnalysisResult> allResults = [];
+      dynamic firstPhotoId;
+      // 🔥 모든 파일의 itemSeqList 처리
+      for (final p in photos) {
+        firstPhotoId ??= p['photoId'];
+        final fileUrl = p['fileUrl'] as String?;
+        final photoId = p['photoId'];
+        final itemSeqList = (p['itemSeqList'] as List<dynamic>? ?? [])
+            .map((e) => e.toString())
+            .toList();
+
+        if (itemSeqList.isEmpty) continue;
+
+        // 전체 전역 스캔 누적
+        _scannedItemSeqs.addAll(itemSeqList);
+
+        for (final seq in itemSeqList) {
+          try {
+            // 1) DUR 조회
+            final drugRes = await ApiService.getDrugCaution(
+              itemSeqList: [seq],
+              photoId: photoId,
+            );
+
+            final cautionResult = _parseDrugCautionResponse(
+              drugRes.data,
+              preferredItemSeq: seq,
+            );
+
+            AnalysisResult finalResult = cautionResult;
+
+            // 2) 상세 조회
+            try {
+              final detailRes = await ApiService.getDrugDetail(seq);
+              final detailResult = _parseDrugDetailResponse(detailRes.data);
+
+              final mergedWarnings = <Warning>[
+                ...cautionResult.warnings,
+                ...detailResult.warnings,
+              ];
+
+              final imageUrl =
+                  (detailResult.pillInfo.itemImage.isNotEmpty
+                      ? detailResult.pillInfo.itemImage
+                      : null) ??
+                  (fileUrl?.isNotEmpty == true ? fileUrl : null) ??
+                  '';
+
+              finalResult = AnalysisResult(
+                pillInfo: PillInfo(
+                  itemName: detailResult.pillInfo.itemName,
+                  itemSeq: detailResult.pillInfo.itemSeq,
+                  entpName: detailResult.pillInfo.entpName,
+                  itemImage: imageUrl,
+                  efcyQesitm: detailResult.pillInfo.efcyQesitm,
+                  useMethodQesitm: detailResult.pillInfo.useMethodQesitm,
+                  atpnWarnQesitm: detailResult.pillInfo.atpnWarnQesitm,
+                  atpnQesitm: detailResult.pillInfo.atpnQesitm,
+                  intrcQesitm: detailResult.pillInfo.intrcQesitm,
+                  seQesitm: detailResult.pillInfo.seQesitm,
+                ),
+                warnings: mergedWarnings,
+                overallCaution: cautionResult.overallCaution,
+              );
+            } catch (_) {}
+
+            allResults.add(finalResult);
+          } catch (e) {
+            print("⚠️ itemSeq 처리 실패: $e");
+          }
+        }
+      }
+
+      if (allResults.isEmpty) {
+        throw Exception("❌ 어떤 사진에서도 알약을 찾지 못했습니다.");
+      }
+
+      // 🟧 화면 반영
+      setState(() {
+        currentShotResults = allResults;
+        currentPillIndex = 0;
+        analysisResult = allResults.first;
+
+        // 🔥 최근 분석 기록을 "알약별"로 모두 추가 + 중복 제거 + 최대 10개까지만 유지
+        final List<AnalysisResult> merged = [];
+        final Set<String> seenItemSeqs = {};
+
+        // 1) 이번에 새로 나온 알약들부터 앞에 쌓기
+        for (final r in allResults) {
+          final seq = r.pillInfo.itemSeq;
+          if (seenItemSeqs.add(seq)) {
+            merged.add(r);
+          }
+        }
+
+        // 2) 기존 히스토리도 이어 붙이되, 이미 나온 itemSeq는 건너뛴다
+        for (final r in analysisHistory) {
+          final seq = r.pillInfo.itemSeq;
+          if (seenItemSeqs.add(seq)) {
+            merged.add(r);
+          }
+        }
+
+        // 3) 너무 길어지지 않게 앞에서부터 최대 10개까지만
+        analysisHistory = merged.take(10).toList();
+
+        viewMode = ViewMode.result;
+      });
+
+      // 🔥🔥 여기서부터 GLOBAL overallCaution 디버그 + 계산 코드 추가 🔥🔥
+      try {
+        if (_scannedItemSeqs.isNotEmpty) {
+          final globalDrugRes = await ApiService.getDrugCaution(
+            itemSeqList: _scannedItemSeqs.toList(),
+            photoId: firstPhotoId, // 멀티 대표 photoId
+          );
+
+          print("🌐 [MULTI DEBUG] /drug/caution (GLOBAL) ↓↓↓");
+          ApiService.printLong(globalDrugRes.data);
+          print("🌐 [MULTI DEBUG] _scannedItemSeqs: $_scannedItemSeqs");
+
+          final data = globalDrugRes.data['data'] as Map<String, dynamic>?;
+
+          // 1순위: data['overallCaution']
+          String? oc = data?['overallCaution'] as String?;
+          print("🌐 [MULTI DEBUG] data['overallCaution']: $oc");
+
+          // 2순위: foundDrugs[*].overallCaution 합치기
+          final foundList = (data?['foundDrugs'] as List<dynamic>? ?? []);
+          print("🌐 [MULTI DEBUG] foundDrugs length: ${foundList.length}");
+
+          for (final f in foundList) {
+            print(
+              "🌐 [MULTI DEBUG] foundDrug overallCaution: ${(f as Map)['overallCaution']}",
+            );
+          }
+
+          final seen = <String>{};
+          final buffer = StringBuffer();
+          for (final f in foundList) {
+            final m = f as Map<String, dynamic>;
+            final c = m['overallCaution'] as String?;
+            if (c == null) continue;
+            final trimmed = c.trim();
+            if (trimmed.isEmpty) continue;
+            if (seen.add(trimmed)) buffer.writeln(trimmed);
+          }
+
+          final combined = buffer.toString().trim();
+          print("🌐 [MULTI DEBUG] combined overallCaution: $combined");
+
+          if (combined.isNotEmpty) {
+            oc = combined;
+          }
+
+          if (mounted) {
+            setState(() {
+              print("🌐 [MULTI DEBUG] 최종 globalOverallCaution 저장됨: $oc");
+              globalOverallCaution = oc;
+            });
+          }
+        }
+      } catch (e) {
+        print('⚠️ [MULTI] 글로벌 overallCaution 조회 실패: $e');
+      }
+      // 🔥🔥 여기까지 추가 🔥🔥
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('🚨 분석 오류: $e')));
+    } finally {
+      setState(() => isAnalyzing = false);
+    }
+  }
+
   Future<void> handleAnalyze(File imageFile) async {
-    setState(() => isAnalyzing = true);
+    setState(() {
+      isAnalyzing = true;
+      currentShotResults = [];
+      currentPillIndex = 0;
+    });
 
     try {
       // 1️⃣ 이미지 업로드 → AI 모델이 itemSeq 리스트 반환
@@ -393,112 +605,227 @@ class _MainDashboardState extends State<MainDashboard> {
         throw Exception("❌ AI 분석 실패: item_seq를 가져오지 못함");
       }
 
-      // ✅ 기준이 되는 첫 번째 itemSeq를 명확히 정해줌
-      final firstItemSeq = itemSeqList.first.toString();
+      // 문자열 리스트로 변환
+      final itemSeqStrings = itemSeqList
+          .map((e) => e.toString())
+          .toList(growable: false);
 
-      print("🧠 AI 결과 item_seq: $itemSeqList (기준 itemSeq: $firstItemSeq)");
+      print("🧠 AI 결과 item_seq 전체: $itemSeqStrings");
 
-      // 2️⃣ DUR + overallCaution 조회 (/drug/caution)
-      final drugRes = await ApiService.getDrugCaution(
-        itemSeqList: [firstItemSeq], // ✅ 하나만 명확하게 보냄
-        photoId: photoId,
-      );
+      // 🔥 지금까지 찍은 전체 약 목록에 이번 사진 itemSeq를 추가 (전역 상호작용용)
+      _scannedItemSeqs.addAll(itemSeqStrings);
+      print("📚 누적 itemSeq 목록: $_scannedItemSeqs");
 
-      print("💊 [DEBUG] /drug/caution FULL RESPONSE ↓↓↓");
-      ApiService.printLong(drugRes.data);
+      // 2️⃣ 각 itemSeq마다 개별적으로 DUR + 상세 조회 후 AnalysisResult 생성
+      final List<AnalysisResult> pillResults = [];
 
-      // ✅ 여기서도 기준 itemSeq를 넘겨줌
-      final cautionResult = _parseDrugCautionResponse(
-        drugRes.data,
-        preferredItemSeq: firstItemSeq,
-      );
+      for (final seq in itemSeqStrings) {
+        try {
+          print('💊 [$seq] /drug/caution 호출 시작');
 
-      // 기본 finalResult는 cautionResult
-      AnalysisResult finalResult = cautionResult;
+          // DUR + overallCaution 조회 (해당 알약 기준)
+          final drugRes = await ApiService.getDrugCaution(
+            itemSeqList: [seq], // 한 알씩 조회
+            photoId: photoId,
+          );
 
-      try {
-        // 3️⃣ 첫 번째 itemSeq 기준으로 상세 정보 조회 (/drug/{itemSeq})
-        final firstItemSeq = itemSeqList.first.toString();
-        final detailRes = await ApiService.getDrugDetail(firstItemSeq);
+          print("💊 [$seq] /drug/caution FULL RESPONSE ↓↓↓");
+          ApiService.printLong(drugRes.data);
 
-        print("📄 [DEBUG] /drug/$firstItemSeq FULL RESPONSE ↓↓↓");
-        ApiService.printLong(detailRes.data);
+          // caution 파싱
+          final cautionResult = _parseDrugCautionResponse(
+            drugRes.data,
+            preferredItemSeq: seq,
+          );
 
-        final detailResult = _parseDrugDetailResponse(detailRes.data);
+          AnalysisResult finalResult = cautionResult;
 
-        // 3-1️⃣ warnings 합치기 (DUR + 상세 상호작용/부작용/주의사항)
-        final mergedWarnings = <Warning>[
-          ...cautionResult.warnings,
-          ...detailResult.warnings,
-        ];
+          try {
+            // 상세 정보 조회 (/drug/{itemSeq})
+            final detailRes = await ApiService.getDrugDetail(seq);
+            print("📄 [$seq] /drug/$seq FULL RESPONSE ↓↓↓");
+            ApiService.printLong(detailRes.data);
 
-        // 3-2️⃣ 사용할 이미지 URL 결정 (DB > 업로드 > caution)
-        final String imageUrl =
-            (detailResult.pillInfo.itemImage.isNotEmpty
-                ? detailResult.pillInfo.itemImage
-                : null) ??
-            (uploadImageUrl?.isNotEmpty == true ? uploadImageUrl : null) ??
-            (cautionResult.pillInfo.itemImage.isNotEmpty
-                ? cautionResult.pillInfo.itemImage
-                : '');
+            final detailResult = _parseDrugDetailResponse(detailRes.data);
 
-        // 3-3️⃣ 최종 결과 구성
-        finalResult = AnalysisResult(
-          pillInfo: PillInfo(
-            itemName: detailResult.pillInfo.itemName,
-            itemSeq: detailResult.pillInfo.itemSeq,
-            entpName: detailResult.pillInfo.entpName,
-            itemImage: imageUrl, // 🔥 여기서 최종 확정
-            efcyQesitm: detailResult.pillInfo.efcyQesitm,
-            useMethodQesitm: detailResult.pillInfo.useMethodQesitm,
-            atpnWarnQesitm: detailResult.pillInfo.atpnWarnQesitm,
-            atpnQesitm: detailResult.pillInfo.atpnQesitm,
-            intrcQesitm: detailResult.pillInfo.intrcQesitm,
-            seQesitm: detailResult.pillInfo.seQesitm,
-          ),
-          warnings: mergedWarnings,
-          overallCaution: cautionResult.overallCaution,
-        );
-      } catch (e) {
-        // 상세 조회/머지 실패해도 cautionResult + 업로드/기타 이미지로 최대한 채움
-        print("⚠️ /drug/{itemSeq} 상세 병합 실패: $e");
+            // warnings 합치기 (DUR + 상세 상호작용/부작용/주의사항)
+            final mergedWarnings = <Warning>[
+              ...cautionResult.warnings,
+              ...detailResult.warnings,
+            ];
 
-        final String imageUrl =
-            (cautionResult.pillInfo.itemImage.isNotEmpty
-                ? cautionResult.pillInfo.itemImage
-                : null) ??
-            (uploadImageUrl?.isNotEmpty == true ? uploadImageUrl : null) ??
-            '';
+            // 사용할 이미지 URL 결정 (DB > 업로드 > caution)
+            final String imageUrl =
+                (detailResult.pillInfo.itemImage.isNotEmpty
+                    ? detailResult.pillInfo.itemImage
+                    : null) ??
+                (uploadImageUrl?.isNotEmpty == true ? uploadImageUrl : null) ??
+                (cautionResult.pillInfo.itemImage.isNotEmpty
+                    ? cautionResult.pillInfo.itemImage
+                    : '');
 
-        finalResult = AnalysisResult(
-          pillInfo: PillInfo(
-            itemName: cautionResult.pillInfo.itemName,
-            itemSeq: cautionResult.pillInfo.itemSeq,
-            entpName: cautionResult.pillInfo.entpName,
-            itemImage: imageUrl,
-            efcyQesitm: cautionResult.pillInfo.efcyQesitm,
-            useMethodQesitm: cautionResult.pillInfo.useMethodQesitm,
-            atpnWarnQesitm: cautionResult.pillInfo.atpnWarnQesitm,
-            atpnQesitm: cautionResult.pillInfo.atpnQesitm,
-            intrcQesitm: cautionResult.pillInfo.intrcQesitm,
-            seQesitm: cautionResult.pillInfo.seQesitm,
-          ),
-          warnings: cautionResult.warnings,
-          overallCaution: cautionResult.overallCaution,
-        );
+            finalResult = AnalysisResult(
+              pillInfo: PillInfo(
+                itemName: detailResult.pillInfo.itemName,
+                itemSeq: detailResult.pillInfo.itemSeq,
+                entpName: detailResult.pillInfo.entpName,
+                itemImage: imageUrl,
+                efcyQesitm: detailResult.pillInfo.efcyQesitm,
+                useMethodQesitm: detailResult.pillInfo.useMethodQesitm,
+                atpnWarnQesitm: detailResult.pillInfo.atpnWarnQesitm,
+                atpnQesitm: detailResult.pillInfo.atpnQesitm,
+                intrcQesitm: detailResult.pillInfo.intrcQesitm,
+                seQesitm: detailResult.pillInfo.seQesitm,
+              ),
+              warnings: mergedWarnings,
+              overallCaution: cautionResult.overallCaution,
+            );
+          } catch (e) {
+            // 상세 조회 실패 시 cautionResult + 이미지 보정만 해서 사용
+            print("⚠️ [$seq] /drug/{itemSeq} 상세 병합 실패: $e");
+
+            final String imageUrl =
+                (cautionResult.pillInfo.itemImage.isNotEmpty
+                    ? cautionResult.pillInfo.itemImage
+                    : null) ??
+                (uploadImageUrl?.isNotEmpty == true ? uploadImageUrl : null) ??
+                '';
+
+            finalResult = AnalysisResult(
+              pillInfo: PillInfo(
+                itemName: cautionResult.pillInfo.itemName,
+                itemSeq: cautionResult.pillInfo.itemSeq,
+                entpName: cautionResult.pillInfo.entpName,
+                itemImage: imageUrl,
+                efcyQesitm: cautionResult.pillInfo.efcyQesitm,
+                useMethodQesitm: cautionResult.pillInfo.useMethodQesitm,
+                atpnWarnQesitm: cautionResult.pillInfo.atpnWarnQesitm,
+                atpnQesitm: cautionResult.pillInfo.atpnQesitm,
+                intrcQesitm: cautionResult.pillInfo.intrcQesitm,
+                seQesitm: cautionResult.pillInfo.seQesitm,
+              ),
+              warnings: cautionResult.warnings,
+              overallCaution: cautionResult.overallCaution,
+            );
+          }
+
+          pillResults.add(finalResult);
+        } catch (e) {
+          print('🚨 [$seq] 약 정보 처리 중 오류: $e');
+          // 여기서 continue 해서 나머지 itemSeq는 계속 진행
+        }
       }
 
-      print('🖼 최종 finalResult image: ${finalResult.pillInfo.itemImage}');
+      if (pillResults.isEmpty) {
+        throw Exception('❌ 모든 알약 처리에 실패했습니다.');
+      }
 
-      // 4️⃣ 상태 반영
+      print(
+        '🖼 이번 촬영에서 생성된 결과 개수: ${pillResults.length}, 첫 알약 이미지: ${pillResults.first.pillInfo.itemImage}',
+      );
+
+      // 3️⃣ 상태 반영: 여러 알약 결과를 currentShotResults에 저장
       setState(() {
-        analysisResult = finalResult;
-        analysisHistory = [finalResult, ...analysisHistory.take(4).toList()];
+        currentShotResults = pillResults;
+        currentPillIndex = 0;
+
+        // 기존 로직과 호환을 위해 첫 번째 알약을 analysisResult로 유지
+        analysisResult = pillResults.first;
+
+        // 🔥 최근 분석 기록을 "알약별"로 모두 추가 + 중복 제거 + 최대 10개까지만 유지
+        final List<AnalysisResult> merged = [];
+        final Set<String> seenItemSeqs = {};
+
+        // 1) 이번에 새로 나온 알약들부터 앞에 쌓기
+        for (final r in pillResults) {
+          final seq = r.pillInfo.itemSeq;
+          if (seenItemSeqs.add(seq)) {
+            merged.add(r);
+          }
+        }
+
+        // 2) 기존 히스토리도 이어 붙이되, 이미 나온 itemSeq는 건너뛴다
+        for (final r in analysisHistory) {
+          final seq = r.pillInfo.itemSeq;
+          if (seenItemSeqs.add(seq)) {
+            merged.add(r);
+          }
+        }
+
+        // 3) 너무 길어지지 않게 앞에서부터 최대 10개까지만
+        analysisHistory = merged.take(10).toList();
+
         viewMode = ViewMode.result;
       });
 
-      // GPT는 백에서 overallCaution 돌리고 있으니 생략 가능
-      // await fetchGptOverallCaution(finalResult);
+      // 🔥 4️⃣ 지금까지 찍은 모든 약 조합 기준으로 전역 overallCaution 계산
+      try {
+        if (_scannedItemSeqs.isNotEmpty) {
+          final globalDrugRes = await ApiService.getDrugCaution(
+            itemSeqList: _scannedItemSeqs.toList(),
+            photoId: photoId,
+          );
+
+          print("🌐 [DEBUG] /drug/caution (GLOBAL) ↓↓↓");
+          ApiService.printLong(globalDrugRes.data);
+
+          // 현재 스캔 누적된 itemSeq들
+          print("🌐 [DEBUG] _scannedItemSeqs: $_scannedItemSeqs");
+
+          final data = globalDrugRes.data['data'] as Map<String, dynamic>?;
+
+          // 1순위: data['overallCaution']
+          String? oc = data?['overallCaution'] as String?;
+          print("🌐 [DEBUG] data['overallCaution']: $oc");
+
+          // 2순위: foundDrugs[*].overallCaution 합치기
+          final foundList = (data?['foundDrugs'] as List<dynamic>? ?? []);
+          print("🌐 [DEBUG] foundDrugs length: ${foundList.length}");
+
+          for (final f in foundList) {
+            print(
+              "🌐 [DEBUG] foundDrug overallCaution: ${(f as Map)['overallCaution']}",
+            );
+          }
+
+          // 기존 합치기 로직 유지
+          final seen = <String>{};
+          final buffer = StringBuffer();
+
+          for (final f in foundList) {
+            final m = f as Map<String, dynamic>;
+            final c = m['overallCaution'] as String?;
+            if (c == null) continue;
+            final trimmed = c.trim();
+            if (trimmed.isEmpty) continue;
+            if (seen.add(trimmed)) buffer.writeln(trimmed);
+          }
+
+          final combined = buffer.toString().trim();
+          print("🌐 [DEBUG] combined overallCaution: $combined");
+
+          if (combined.isNotEmpty) {
+            oc = combined;
+          }
+
+          if (mounted) {
+            setState(() {
+              print("🌐 [DEBUG] 최종 globalOverallCaution 저장됨: $oc");
+              globalOverallCaution = oc;
+            });
+          }
+        }
+      } catch (e) {
+        print('⚠️ 글로벌 overallCaution 조회 실패: $e');
+        if (mounted) {
+          setState(() {
+            globalOverallCaution = null;
+          });
+        }
+      }
+
+      // GPT 종합 분석은 현재 선택된 알약(첫 번째) 기준으로 필요하면 호출
+      // await fetchGptOverallCaution(pillResults.first);
     } catch (e) {
       ScaffoldMessenger.of(
         context,
@@ -539,7 +866,12 @@ class _MainDashboardState extends State<MainDashboard> {
   }
 
   Widget _buildGptAnalysisCard() {
-    final overall = analysisResult?.overallCaution;
+    // 1순위: 전역 overallCaution (여러 알약 조합 기준)
+    String? overall = globalOverallCaution;
+    if (overall == null || overall.trim().isEmpty) {
+      // 2순위: 현재 선택된 알약 1개 기준
+      overall = analysisResult?.overallCaution;
+    }
 
     return Card(
       child: Container(
@@ -564,7 +896,7 @@ class _MainDashboardState extends State<MainDashboard> {
               const SizedBox(height: 8),
               Text(
                 'AI/DUR 기반으로 생성된 전반적인 주의사항 안내',
-                style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                style: TextStyle(color: Colors.grey, fontSize: 14),
               ),
               const SizedBox(height: 16),
               if (overall == null || overall.isEmpty)
@@ -673,7 +1005,7 @@ class _MainDashboardState extends State<MainDashboard> {
               // 카메라 캡처
               Expanded(
                 child: CameraCapture(
-                  onAnalyze: handleAnalyze,
+                  onAnalyzeMulti: handleAnalyzeMulti,
                   isAnalyzing: isAnalyzing,
                 ),
               ),
@@ -717,11 +1049,31 @@ class _MainDashboardState extends State<MainDashboard> {
   }
 
   Widget _buildResultView() {
-    print('🖼 resultView image: ${analysisResult?.pillInfo.itemImage}');
+    // 이번 촬영에서 나온 알약들 (없으면 기존 analysisResult만 사용)
+    final results = currentShotResults.isNotEmpty
+        ? currentShotResults
+        : (analysisResult != null ? [analysisResult!] : <AnalysisResult>[]);
+
+    if (results.isEmpty) {
+      // 방어 코드: 결과가 없으면 대시보드로 돌려보내기
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        handleBackToDashboard();
+      });
+      return const SizedBox.shrink();
+    }
+
+    // 현재 인덱스가 범위 밖이면 보정
+    if (currentPillIndex >= results.length) {
+      currentPillIndex = 0;
+    }
+
+    print(
+      '🖼 resultView pills: ${results.length}, current index: $currentPillIndex, image: ${results[currentPillIndex].pillInfo.itemImage}',
+    );
 
     return Scaffold(
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -733,16 +1085,16 @@ class _MainDashboardState extends State<MainDashboard> {
             children: [
               // 헤더
               Padding(
-                padding: EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     TextButton.icon(
                       onPressed: handleBackToDashboard,
-                      icon: Icon(Icons.arrow_back),
-                      label: Text('대시보드로'),
+                      icon: const Icon(Icons.arrow_back),
+                      label: const Text('대시보드로'),
                     ),
-                    Text(
+                    const Text(
                       '분석 결과',
                       style: TextStyle(
                         fontSize: 18,
@@ -751,49 +1103,52 @@ class _MainDashboardState extends State<MainDashboard> {
                     ),
                     OutlinedButton.icon(
                       onPressed: handleNewScan,
-                      icon: Icon(Icons.camera_alt, size: 16),
-                      label: Text('새 촬영'),
+                      icon: const Icon(Icons.camera_alt, size: 16),
+                      label: const Text('새 촬영'),
                     ),
                   ],
                 ),
               ),
 
-              // 결과 내용
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      // 🔥 약 사진 썸네일
-                      /*if (analysisResult!.pillInfo.itemImage.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: Image.network(
-                              analysisResult!.pillInfo.itemImage,
-                              width: 120,
-                              height: 120,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) {
-                                return Container(
-                                  width: 120,
-                                  height: 120,
-                                  color: Colors.grey[300],
-                                  child: const Icon(
-                                    Icons.medical_services,
-                                    size: 40,
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ),*/
-                      PillInfoCard(pillInfo: analysisResult!.pillInfo),
-                      const SizedBox(height: 16),
-                      WarningsList(warnings: analysisResult!.warnings),
-                    ],
+              // 인덱스 표시 (여러 개일 때만)
+              if (results.length > 1)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    '${currentPillIndex + 1} / ${results.length}개 알약',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
+                ),
+
+              // 결과 내용 : PageView로 좌우 스와이프
+              Expanded(
+                child: PageView.builder(
+                  itemCount: results.length,
+                  controller: PageController(initialPage: currentPillIndex),
+                  onPageChanged: (index) {
+                    setState(() {
+                      currentPillIndex = index;
+                      analysisResult = results[index]; // 다른 화면에서 재사용용
+                    });
+                  },
+                  itemBuilder: (context, index) {
+                    final result = results[index];
+
+                    return SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          PillInfoCard(pillInfo: result.pillInfo),
+                          const SizedBox(height: 16),
+                          WarningsList(warnings: result.warnings),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -1177,8 +1532,13 @@ class _MainDashboardState extends State<MainDashboard> {
                                       TextButton(
                                         onPressed: () {
                                           setState(() {
+                                            // ✅ 히스토리에서 상세보기로 들어올 때는
+                                            // 이 알약 하나만 있는 결과 세트를 새로 만든다
+                                            currentShotResults = [result];
+                                            currentPillIndex = 0;
+
                                             analysisResult =
-                                                result; // 이 기록을 현재 선택된 결과로 설정
+                                                result; // 현재 선택된 결과로 설정
                                             viewMode =
                                                 ViewMode.result; // 결과 화면으로 전환
                                           });

@@ -3,12 +3,12 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 
 class CameraCapture extends StatefulWidget {
-  final Future<void> Function(File) onAnalyze;
+  final Future<void> Function(List<File>) onAnalyzeMulti;
   final bool isAnalyzing;
 
   const CameraCapture({
     Key? key,
-    required this.onAnalyze,
+    required this.onAnalyzeMulti,
     this.isAnalyzing = false,
   }) : super(key: key);
 
@@ -17,8 +17,10 @@ class CameraCapture extends StatefulWidget {
 }
 
 class _CameraCaptureState extends State<CameraCapture> {
-  File? selectedImage;
   final ImagePicker _picker = ImagePicker();
+
+  // 🔥 여러 장 이미지 저장 리스트
+  final List<File> selectedImages = [];
 
   Future<void> _pickImageFromCamera() async {
     try {
@@ -30,44 +32,41 @@ class _CameraCaptureState extends State<CameraCapture> {
 
       if (photo != null) {
         setState(() {
-          selectedImage = File(photo.path);
+          selectedImages.add(File(photo.path));
         });
       }
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('카메라를 열 수 없습니다: $e')));
+      ).showSnackBar(SnackBar(content: Text('카메라 오류: $e')));
     }
   }
 
-  Future<void> _pickImageFromGallery() async {
+  Future<void> _pickImagesFromGallery() async {
     try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 80,
-      );
+      final List<XFile> files = await _picker.pickMultiImage(imageQuality: 80);
 
-      if (image != null) {
+      if (files.isNotEmpty) {
         setState(() {
-          selectedImage = File(image.path);
+          selectedImages.addAll(files.map((f) => File(f.path)));
         });
       }
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('갤러리를 열 수 없습니다: $e')));
+      ).showSnackBar(SnackBar(content: Text('갤러리 오류: $e')));
     }
   }
 
   void _handleAnalyze() async {
-    if (selectedImage != null) {
-      widget.onAnalyze(selectedImage!);
+    if (selectedImages.isNotEmpty) {
+      widget.onAnalyzeMulti(selectedImages);
     }
   }
 
-  void _clearImage() {
+  void _clearImages() {
     setState(() {
-      selectedImage = null;
+      selectedImages.clear();
     });
   }
 
@@ -80,48 +79,68 @@ class _CameraCaptureState extends State<CameraCapture> {
           padding: EdgeInsets.all(16),
           child: Column(
             children: [
-              // 제목
-              Text(
-                '알약 촬영',
+              const Text(
+                '알약 촬영/업로드',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
-              SizedBox(height: 8),
+              const SizedBox(height: 8),
               Text(
-                '알약을 촬영하거나 이미지를 업로드해주세요',
-                style: TextStyle(color: Colors.grey[600]),
+                '여러 장의 사진을 촬영하거나 업로드할 수 있습니다.',
+                style: TextStyle(color: Colors.grey),
                 textAlign: TextAlign.center,
               ),
-              SizedBox(height: 24),
+              const SizedBox(height: 24),
 
-              // 이미지 표시 영역
-              if (selectedImage != null) ...[
-                // 선택된 이미지 표시
-                Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        selectedImage!,
-                        width: double.infinity,
-                        height: 250,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: IconButton(
-                        onPressed: widget.isAnalyzing ? null : _clearImage,
-                        icon: Icon(Icons.close),
-                        style: IconButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
+              // ----------------------
+              // 🔥 선택된 이미지들 미리보기
+              // ----------------------
+              if (selectedImages.isNotEmpty) ...[
+                Container(
+                  height: 200,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: selectedImages.length,
+                    separatorBuilder: (_, __) => SizedBox(width: 10),
+                    itemBuilder: (_, index) {
+                      final img = selectedImages[index];
+                      return Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.file(
+                              img,
+                              width: 160,
+                              height: 200,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          Positioned(
+                            top: 6,
+                            right: 6,
+                            child: CircleAvatar(
+                              backgroundColor: Colors.red,
+                              radius: 14,
+                              child: IconButton(
+                                padding: EdgeInsets.zero,
+                                icon: Icon(Icons.close, size: 14),
+                                color: Colors.white,
+                                onPressed: widget.isAnalyzing
+                                    ? null
+                                    : () {
+                                        setState(() {
+                                          selectedImages.removeAt(index);
+                                        });
+                                      },
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
                 ),
-                SizedBox(height: 16),
+
+                const SizedBox(height: 16),
 
                 // 분석 버튼
                 SizedBox(
@@ -146,33 +165,45 @@ class _CameraCaptureState extends State<CameraCapture> {
                               Text('AI 분석 중...'),
                             ],
                           )
-                        : Text('알약 분석하기'),
+                        : Text('${selectedImages.length}장 분석하기'),
                   ),
                 ),
-              ] else ...[
-                // 이미지 선택 영역
+
+                const SizedBox(height: 8),
+
+                TextButton.icon(
+                  onPressed: _clearImages,
+                  icon: Icon(Icons.delete),
+                  label: Text("모두 삭제"),
+                ),
+              ],
+
+              // ----------------------
+              // ❌ 선택된 사진 없을 때
+              // ----------------------
+              if (selectedImages.isEmpty) ...[
                 Container(
                   width: double.infinity,
-                  height: 200,
+                  height: 180,
                   decoration: BoxDecoration(
-                    border: Border.all(
-                      color: Colors.grey[300]!,
-                      width: 2,
-                      style: BorderStyle.solid,
-                    ),
+                    border: Border.all(color: Colors.grey.shade300, width: 2),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.camera_alt, size: 48, color: Colors.grey[400]),
-                      SizedBox(height: 16),
-                      Text(
-                        '카메라로 알약을 촬영하거나\n파일을 선택하세요',
-                        style: TextStyle(color: Colors.grey[600]),
+                      Icon(
+                        Icons.photo_library,
+                        size: 48,
+                        color: Colors.grey.shade400,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        '사진을 여러 장 선택하거나 촬영해보세요',
+                        style: TextStyle(color: Colors.grey),
                         textAlign: TextAlign.center,
                       ),
-                      SizedBox(height: 16),
+                      const SizedBox(height: 16),
                       OutlinedButton.icon(
                         onPressed: _pickImageFromCamera,
                         icon: Icon(Icons.camera_alt),
@@ -181,26 +212,25 @@ class _CameraCaptureState extends State<CameraCapture> {
                     ],
                   ),
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-                // 파일 선택 버튼
                 SizedBox(
                   width: double.infinity,
                   child: TextButton.icon(
-                    onPressed: _pickImageFromGallery,
+                    onPressed: _pickImagesFromGallery,
                     icon: Icon(Icons.upload_file),
-                    label: Text('파일에서 선택'),
+                    label: Text('갤러리에서 여러 장 선택'),
                   ),
                 ),
               ],
 
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
 
               // 팁
               Container(
                 padding: EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.blue[50],
+                  color: Colors.blue.shade50,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
@@ -209,8 +239,11 @@ class _CameraCaptureState extends State<CameraCapture> {
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        '팁: 알약을 밝은 곳에서 선명하게 촬영해주세요',
-                        style: TextStyle(color: Colors.blue[700], fontSize: 12),
+                        '밝은 곳에서 선명하게 찍을수록 AI 분석 정확도가 높아집니다.',
+                        style: TextStyle(
+                          color: Colors.blue.shade700,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                   ],
